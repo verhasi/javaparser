@@ -148,7 +148,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <java.version>1.8</java.version>
-        <byte-buddy.version>1.15.11</byte-buddy.version>
+        <byte-buddy.version>1.16.0</byte-buddy.version>
         <build.timestamp>2024-12-16T00:00:00Z</build.timestamp>
         <jacoco.javaagent/>
     </properties>
@@ -365,7 +365,7 @@
                     <groupId>com.diffplug.spotless</groupId>
                     <artifactId>spotless-maven-plugin</artifactId>
                     <!-- This is the last version with Java 8 support -->
-                    <version>2.43.0</version>
+                    <version>2.44.2</version>
                     <configuration>
                         <java>
                             <!-- google-java-format, but better: see https://github.com/palantir/palantir-java-format -->
