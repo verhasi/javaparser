@@ -59,6 +59,59 @@ Breaking this ordering causes silent metamodel corruption.
 | `@AllFieldsConstructor` | Constructor with all fields | Generators use this to produce builders/constructors |
 | `@OptionalProperty` | Field may be null | Generators produce Optional-aware accessors |
 | `@DerivedProperty` | Field computed from others | Excluded from equality/hash/clone |
+| `@Generated("...")` | Method is auto-generated | DO NOT manually edit - will be overwritten by generators |
+
+## 5. AST Node Implementation Pattern
+
+Every AST node class follows this exact structure:
+
+```java
+public class XxxExpr extends Expression implements NodeWithYyy<XxxExpr> {
+
+    // 1. Fields (private, one per line)
+    private NodeList<Parameter> parameters;
+    private boolean someFlag;
+
+    // 2. Convenience constructors (manual, NOT generated)
+    public XxxExpr() { this(null, new NodeList<>(), false); }
+
+    // 3. @AllFieldsConstructor (manual - drives code generation)
+    @AllFieldsConstructor
+    public XxxExpr(NodeList<Parameter> parameters, boolean someFlag) {
+        this(null, parameters, someFlag);
+    }
+
+    // 4. Main constructor with TokenRange (GENERATED - do not edit)
+    @Generated("com.github.javaparser.generator.core.node.MainConstructorGenerator")
+    public XxxExpr(TokenRange tokenRange, NodeList<Parameter> parameters, boolean someFlag) {
+        super(tokenRange);
+        setParameters(parameters);
+        setSomeFlag(someFlag);
+        customInitialization();
+    }
+
+    // 5. Getters/Setters (GENERATED - PropertyGenerator)
+    // Setters follow this pattern:
+    //   - assertNotNull(value) for non-optional fields
+    //   - Short-circuit if same value: if (value == this.field) return this;
+    //   - notifyPropertyChange(ObservableProperty.XXX, old, new)
+    //   - setParentNode(null) on old child, setAsParentNodeOf(new child)
+    //   - Return this (fluent API)
+
+    // 6. accept() methods (GENERATED - AcceptGenerator)
+    // 7. @DerivedProperty methods (manual - business logic)
+    // 8. remove()/replace() methods (GENERATED - RemoveMethodGenerator/ReplaceMethodGenerator)
+    // 9. clone() (GENERATED - CloneGenerator)
+    // 10. getMetaModel() (GENERATED - GetMetaModelGenerator)
+}
+```
+
+**Key Implementation Rules:**
+- Generated methods are marked with `@Generated("generator.class.name")` — NEVER edit these manually
+- `customInitialization()` is called in the main constructor — override for node-specific setup
+- Setters use `notifyPropertyChange()` for observer pattern support
+- Child nodes must call `setAsParentNodeOf()` to maintain the tree structure
+- Use `assertNotNull()` from `com.github.javaparser.utils.Utils` (not Java's Objects.requireNonNull)
 
 ## 5. Code Style (Non-Negotiable)
 
@@ -120,7 +173,84 @@ git diff  # Must be empty
 - Test behavioral contracts, not implementation details.
 - Test names must accurately describe what they test.
 
-## 8. Module Boundaries
+## 8. Generator Implementation Pattern
+
+All visitor generators extend `VisitorGenerator` and override one method:
+
+```java
+public class XxxVisitorGenerator extends VisitorGenerator {
+    public XxxVisitorGenerator(SourceRoot sourceRoot) {
+        super(sourceRoot, "com.github.javaparser.ast.visitor", "XxxVisitor",
+              "ReturnType", "ArgType", true);
+    }
+
+    @Override
+    protected void generateVisitMethodBody(
+            BaseNodeMetaModel node, MethodDeclaration visitMethod, CompilationUnit compilationUnit) {
+        visitMethod.getParameters().forEach(p -> p.setFinal(true));
+        BlockStmt body = visitMethod.getBody().get();
+        body.getStatements().clear();
+        // Use node.getAllPropertyMetaModels() to iterate fields
+        // Use f("format %s", args) from CodeGenerationUtils for statements
+    }
+}
+```
+
+**Key Generator APIs:**
+- `node.getAllPropertyMetaModels()` — All fields including inherited
+- `node.isAbstract()` — Skip abstract nodes
+- `node.isInstanceOfMetaModel(otherMetaModel)` — Type hierarchy check
+- `node.getTypeName()` — Simple class name
+- `field.getGetterMethodName()` — e.g., "getParameters"
+- `field.getNodeReference()` — Present if field is another AST node
+- `field.isOptional()` / `field.isNodeList()` — Field type classification
+- `f("format", args)` — String.format shortcut from `CodeGenerationUtils`
+
+**The base class `VisitorGenerator.generate()` automatically:**
+- Iterates all non-abstract node meta-models
+- Finds or creates visit methods for each node
+- Calls your `generateVisitMethodBody()` for each
+
+## 9. Parsing Architecture
+
+The parser is the **core purpose** of the project.
+
+### Pipeline: Source Code → AST
+```
+Source String/File/InputStream
+    ↓ Provider (wraps input source)
+    ↓ Processor chain (pre-processing: unicode escapes, etc.)
+    ↓ GeneratedJavaParser (JavaCC-generated from java.jj grammar)
+    ↓ ParseResult<N> (AST + problems + comments)
+    ↓ Processor chain (post-processing: comment insertion, validation)
+    ↓ Final AST
+```
+
+### Key Parsing API Classes
+| Class | Purpose |
+|-------|---------|
+| `JavaParser` | Configurable parser instance (reusable) |
+| `StaticJavaParser` | Static convenience methods (quick parsing) |
+| `ParserConfiguration` | Language level, encoding, processors |
+| `ParseStart<N>` | What to parse (COMPILATION_UNIT, EXPRESSION, STATEMENT, etc.) |
+| `Provider` | Input source abstraction (String, File, InputStream) |
+| `ParseResult<N>` | Result container (AST node + problems + comments) |
+| `GeneratedJavaParser` | JavaCC-generated from java.jj (DO NOT EDIT) |
+
+### Grammar File: java.jj (~6,155 lines)
+- **Location:** `javaparser-core/src/main/javacc/java.jj`
+- **Format:** JavaCC grammar with embedded Java actions
+- **Productions** map directly to AST node construction
+- **LOOKAHEAD** directives resolve grammar ambiguities
+- **Regenerate with:** `./mvnw javacc:javacc`
+
+### Language Level Validation
+- Each Java version has a validator (e.g., `Java1_0Validator`, `Java17Validator`)
+- New syntax needs a **negative validator** in `Java1_0Validator` and removal in the appropriate version
+
+**Critical:** Parsing NEVER throws exceptions for invalid input. Problems are collected in ParseResult.
+
+## 10. Module Boundaries
 
 | Module | Responsibility |
 |--------|---------------|

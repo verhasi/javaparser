@@ -60,6 +60,22 @@
 5. Run: ./mvnw clean test
 ```
 
+### Scenario: Modifying Parser Grammar (java.jj)
+
+```
+1. Understand the existing grammar structure around your change area
+2. Add/modify productions in javaparser-core/src/main/javacc/java.jj
+3. Use LOOKAHEAD where grammar is ambiguous (check JavaCC docs)
+4. Regenerate parser: ./mvnw javacc:javacc
+5. Watch for "Warning: Choice conflict in..." (means LOOKAHEAD needed)
+6. Fix compilation errors in GeneratedJavaParser actions
+7. Write parsing tests that verify correct AST construction
+8. Add validator if this is a version-specific feature:
+   - Negative validator in Java1_0Validator (rejects new syntax)
+   - Remove restriction in the appropriate version validator
+9. Run full test suite: ./mvnw clean test
+```
+
 ### Scenario: Modifying Metamodel
 
 ```
@@ -214,10 +230,64 @@ Is it AST structure, parsing, or visitor logic?
 | Visitors | `javaparser-core/src/main/java/com/github/javaparser/ast/visitor/` |
 | Generators | `javaparser-core-generators/src/main/java/com/github/javaparser/generator/` |
 | Metamodel | `javaparser-core/src/main/java/com/github/javaparser/metamodel/` |
-| Grammar | `javaparser-core/src/main/javacc-support/com/github/javaparser/GeneratedJavaParser.jj` |
+| Grammar | `javaparser-core/src/main/javacc/java.jj` |
 | Tests (core) | `javaparser-core-testing/src/test/java/` |
 | Tests (BDD) | `javaparser-core-testing-bdd/src/test/java/` |
 | Symbol solver | `javaparser-symbol-solver-core/src/main/java/` |
 | IDE settings | `dev-files/JavaParser-idea.xml`, `dev-files/JavaParser-eclipse.xml` |
 | CSM | `javaparser-core/src/main/java/.../printer/ConcreteSyntaxModel.java` |
 | Validators | `javaparser-core/src/main/java/.../ast/validator/language_level_validations/` |
+
+## Source Code Implementation Patterns
+
+### Test File Structure
+```java
+package com.github.javaparser.ast.expr;
+
+import static com.github.javaparser.StaticJavaParser.parseExpression;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class XxxTest {                                         // Package-private (no public)
+
+    @Test
+    void descriptiveTestName() {                        // Package-private methods
+        Expression expr = parseExpression("x -> y");    // Parse → Act → Assert
+        assertEquals("expected", expr.toString());
+    }
+
+    // Helper methods for language-level-specific parsing:
+    private <T> T parseAtLevel(String code, LanguageLevel level) {
+        JavaParser parser = new JavaParser(
+            new ParserConfiguration().setLanguageLevel(level));
+        ParseResult<Statement> result = parser.parse(ParseStart.STATEMENT, provider(code));
+        assertTrue(result.isSuccessful(), result.toString());
+        return (T) result.getResult().get();
+    }
+}
+```
+
+### Generator Field Iteration Pattern
+```java
+for (PropertyMetaModel field : node.getAllPropertyMetaModels()) {
+    final String getter = field.getGetterMethodName() + "()";
+    if (field.getNodeReference().isPresent()) {
+        if (field.isOptional()) { /* Handle Optional<Node> */ }
+        else if (field.isNodeList()) { /* Handle NodeList<Node> */ }
+        else { /* Handle plain Node */ }
+    } else {
+        Class<?> type = field.getType();
+        if (type.equals(boolean.class)) { ... }
+        else if (type.equals(int.class)) { ... }
+        else { /* .hashCode() or .equals() */ }
+    }
+}
+```
+
+### Utility Imports Convention
+```java
+// Use static imports:
+import static com.github.javaparser.utils.Utils.assertNotNull;
+import static com.github.javaparser.utils.CodeGenerationUtils.f;
+import static com.github.javaparser.StaticJavaParser.parseExpression;
+// NOT qualified form: Utils.assertNotNull(x) or String.format(...)
+```
